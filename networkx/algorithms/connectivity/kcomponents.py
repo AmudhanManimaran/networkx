@@ -14,7 +14,7 @@ from networkx.utils import not_implemented_for
 
 default_flow_func = edmonds_karp
 
-__all__ = ["k_components"]
+__all__ = ["k_components", "weak_k_components", "strong_k_components"]
 
 
 @not_implemented_for("directed")
@@ -218,3 +218,116 @@ def build_k_number_dict(kcomps):
         for comp in comps
         for node in comp
     }
+
+
+
+
+@not_implemented_for("undirected")
+@nx._dispatchable
+def weak_k_components(G, flow_func=None):
+    """Returns the weak k-component structure of a directed graph G.
+
+    Ignores edge direction by converting to undirected, then applies
+    the Moody and White algorithm to find k-components.
+
+    A weak k-component groups nodes that are connected by at least k
+    node-independent semipaths, where direction is ignored.
+
+    Parameters
+    ----------
+    G : NetworkX DiGraph
+
+    flow_func : function
+        Function to perform flow computations. Default is edmonds_karp.
+
+    Returns
+    -------
+    dict
+        Dictionary with connectivity levels k as keys and lists of
+        sets of nodes as values.
+
+    Raises
+    ------
+    NetworkXNotImplemented
+        If the input graph is undirected.
+
+    Examples
+    --------
+    >>> G = nx.DiGraph([(0, 1), (1, 2), (2, 3), (3, 0)])
+    >>> weak_k_components(G)
+    {1: [{0, 1, 2, 3}], 2: [{0, 1, 2, 3}]}
+
+    References
+    ----------
+    .. [1] Grannis, R. (2009). Paths and Semipaths:
+       Reconceptualizing Structural Cohesion in Terms of Directed
+       Relations. Sociological Methodology, 39, 117-150.
+       https://www.jstor.org/stable/40376146
+    """
+    if flow_func is None:
+        flow_func = default_flow_func
+    return k_components(G.to_undirected(), flow_func=flow_func)
+
+
+@not_implemented_for("undirected")
+@nx._dispatchable
+def strong_k_components(G, flow_func=None):
+    """Returns the strong k-component structure of a directed graph G.
+
+    Respects edge direction. Uses strongly connected components as the
+    k=1 baseline. For each SCC, computes higher connectivity levels
+    using node connectivity on the directed subgraph.
+
+    A strong k-component groups nodes where every pair shares at least
+    k node-independent directed cycles between them.
+
+    Parameters
+    ----------
+    G : NetworkX DiGraph
+
+    flow_func : function
+        Function to perform flow computations. Default is edmonds_karp.
+
+    Returns
+    -------
+    dict
+        Dictionary with connectivity levels k as keys and lists of
+        sets of nodes as values.
+
+    Raises
+    ------
+    NetworkXNotImplemented
+        If the input graph is undirected.
+
+    Examples
+    --------
+    >>> G = nx.DiGraph([(0, 1), (1, 0), (1, 2), (2, 1), (0, 2), (2, 0)])
+    >>> strong_k_components(G)
+    {1: [{0, 1, 2}], 2: [{0, 1, 2}], 3: [{0, 1, 2}]}
+
+    References
+    ----------
+    .. [1] Grannis, R. (2009). Paths and Semipaths:
+       Reconceptualizing Structural Cohesion in Terms of Directed
+       Relations. Sociological Methodology, 39, 117-150.
+       https://www.jstor.org/stable/40376146
+    """
+    if flow_func is None:
+        flow_func = default_flow_func
+
+    k_comps = defaultdict(list)
+
+    strongly_connected = [
+        set(scc)
+        for scc in nx.strongly_connected_components(G)
+        if len(scc) > 1
+    ]
+
+    for component in strongly_connected:
+        k_comps[1].append(component)
+        subgraph = G.subgraph(component)
+        max_connectivity = nx.node_connectivity(subgraph, flow_func=flow_func)
+        for k in range(2, max_connectivity + 1):
+            k_comps[k].append(component)
+
+    return dict(k_comps)

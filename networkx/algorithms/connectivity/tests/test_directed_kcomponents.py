@@ -1,143 +1,70 @@
 """
-Tests for directed k-components algorithm.
+Tests for directed k-components algorithms:
+weak_k_components and strong_k_components.
 
-These tests define the expected behavior of:
-- weak_k_components: k-components ignoring edge direction
-- strong_k_components: k-components respecting edge direction
-
-Written following TDD approach as suggested by NetworkX
-maintainers in Issue #7106.
+Follows TDD and Clean Code principles (Robert C. Martin, 2008)
+for modular test data management and explicit expected outputs.
 
 References
 ----------
-.. [1] White, D. R., & Harary, F. (2001).
-   The cohesiveness of blocks in social networks:
-   Node connectivity and conditional density.
-   Paths and Semipaths: Reconceptualizing Structural
-   Cohesion in Terms of Directed Relations.
+Grannis, R. (2009). Paths and Semipaths: Reconceptualizing
+Structural Cohesion in Terms of Directed Relations.
+Sociological Methodology, 39, 117-150.
+https://www.jstor.org/stable/40376146
 """
-
 import pytest
-
 import networkx as nx
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
-
-
-def _check_weak_connectivity(G, k_comps):
-    """
-    Verify weak k-components have correct node connectivity
-    when direction is ignored.
-    """
-    G_undirected = G.to_undirected()
-    for k, components in k_comps.items():
-        if k < 3:
-            continue
-        for component in components:
-            C = G_undirected.subgraph(component)
-            K = nx.node_connectivity(C)
-            assert K >= k, (
-                f"Component {component} has connectivity {K} but expected >= {k}"
-            )
-
-
-def _check_strong_connectivity(G, k_comps):
-    """
-    Verify strong k-components have correct node connectivity
-    respecting edge direction.
-    """
-    for k, components in k_comps.items():
-        if k < 3:
-            continue
-        for component in components:
-            C = G.subgraph(component)
-            K = nx.node_connectivity(C)
-            assert K >= k, (
-                f"Component {component} has connectivity {K} but expected >= {k}"
-            )
+from networkx.algorithms.connectivity.kcomponents import (
+    strong_k_components,
+    weak_k_components,
+)
 
 
 # ============================================================
-# BASIC GRAPH FIXTURES
+# GRAPH FACTORIES
+# Each factory has a single responsibility — build one graph.
 # ============================================================
 
 
-def simple_directed_graph():
+def build_simple_directed_cycle():
     """
-    Simple directed graph for basic tests.
+    Returns a simple directed cycle: 0->1->2->3->0.
 
-    A → B → C
-    ↑       ↓
-    └── D ──┘
-
-    Forms a directed cycle: A→B→C→D→A
+    Removing any single node destroys the cycle path,
+    making this graph 1-connected under strong rules,
+    but 2-connected under weak rules (semipaths exist).
     """
     G = nx.DiGraph()
     G.add_edges_from([(0, 1), (1, 2), (2, 3), (3, 0)])
     return G
 
 
-def directed_two_components():
+def build_directed_two_components_with_bridge():
     """
-    Directed graph with two clearly separate components.
+    Returns two directed cycles connected by a one-way bridge.
 
-    Component 1: 0→1→2→0 (cycle)
-    Component 2: 3→4→5→3 (cycle)
-    Connected by: 2→3 (one way bridge)
+    Component 1: 0->1->2->0
+    Component 2: 3->4->5->3
+    Bridge:      2->3 (one-way only)
+
+    The bridge is one-directional, so strong connectivity
+    cannot cross it. Weak connectivity ignores this.
     """
     G = nx.DiGraph()
-    G.add_edges_from(
-        [
-            (0, 1),
-            (1, 2),
-            (2, 0),  # component 1
-            (3, 4),
-            (4, 5),
-            (5, 3),  # component 2
-            (2, 3),  # one-way bridge
-        ]
-    )
+    G.add_edges_from([(0, 1), (1, 2), (2, 0)])
+    G.add_edges_from([(3, 4), (4, 5), (5, 3)])
+    G.add_edge(2, 3)
     return G
 
 
-def strongly_connected_directed_graph():
+def build_directed_complete_graph():
     """
-    Strongly connected directed graph.
-    Every node can reach every other node.
+    Returns a directed complete graph K4.
 
-    0 ⇄ 1 ⇄ 2
-    ↕       ↕
-    3 ⇄ 4 ⇄ 5
-    """
-    G = nx.DiGraph()
-    G.add_edges_from(
-        [
-            (0, 1),
-            (1, 0),
-            (1, 2),
-            (2, 1),
-            (0, 3),
-            (3, 0),
-            (2, 5),
-            (5, 2),
-            (3, 4),
-            (4, 3),
-            (4, 5),
-            (5, 4),
-            (1, 4),
-            (4, 1),
-        ]
-    )
-    return G
-
-
-def directed_complete_graph():
-    """
-    Directed version of K4 — complete graph.
-    Every node connects to every other node
-    in both directions. Maximally connected.
+    Every node connects to every other node in both directions.
+    A 4-node complete directed graph is 3-connected because
+    you must remove 3 nodes to disconnect any pair.
     """
     G = nx.DiGraph()
     nodes = [0, 1, 2, 3]
@@ -148,378 +75,234 @@ def directed_complete_graph():
     return G
 
 
-# ============================================================
-# SECTION 1: BASIC INPUT VALIDATION TESTS
-# ============================================================
-
-
-def test_weak_k_components_accepts_directed_graph():
+def build_single_node_graph():
     """
-    weak_k_components must accept directed graphs
-    without raising NetworkXNotImplemented.
-    This is the core fix Issue #7106 asks for.
-    """
-    G = simple_directed_graph()
-    # Should NOT raise NetworkXNotImplemented
-    result = nx.weak_k_components(G)
-    assert result is not None
+    Returns a directed graph with one node and no edges.
 
-
-def test_strong_k_components_accepts_directed_graph():
-    """
-    strong_k_components must accept directed graphs
-    without raising NetworkXNotImplemented.
-    """
-    G = simple_directed_graph()
-    # Should NOT raise NetworkXNotImplemented
-    result = nx.strong_k_components(G)
-    assert result is not None
-
-
-def test_weak_k_components_rejects_undirected():
-    """
-    weak_k_components should only work on directed graphs.
-    For undirected graphs, use nx.k_components instead.
-    """
-    G = nx.petersen_graph()  # undirected
-    with pytest.raises(nx.NetworkXNotImplemented):
-        nx.weak_k_components(G)
-
-
-def test_strong_k_components_rejects_undirected():
-    """
-    strong_k_components should only work on directed graphs.
-    """
-    G = nx.petersen_graph()  # undirected
-    with pytest.raises(nx.NetworkXNotImplemented):
-        nx.strong_k_components(G)
-
-
-# ============================================================
-# SECTION 2: RETURN TYPE TESTS
-# ============================================================
-
-
-def test_weak_k_components_returns_dict():
-    """
-    weak_k_components must return a dictionary
-    with integer keys (connectivity levels) and
-    list of sets as values — matching k_components format.
-    """
-    G = simple_directed_graph()
-    result = nx.weak_k_components(G)
-    assert isinstance(result, dict)
-    for k, components in result.items():
-        assert isinstance(k, int)
-        assert isinstance(components, list)
-        for component in components:
-            assert isinstance(component, (set, frozenset))
-
-
-def test_strong_k_components_returns_dict():
-    """
-    strong_k_components must return a dictionary
-    with same structure as weak_k_components.
-    """
-    G = simple_directed_graph()
-    result = nx.strong_k_components(G)
-    assert isinstance(result, dict)
-    for k, components in result.items():
-        assert isinstance(k, int)
-        assert isinstance(components, list)
-        for component in components:
-            assert isinstance(component, (set, frozenset))
-
-
-# ============================================================
-# SECTION 3: EMPTY AND TRIVIAL GRAPH TESTS
-# ============================================================
-
-
-def test_weak_k_components_empty_graph():
-    """
-    Empty directed graph should return empty dict.
-    No nodes = no components at any level.
+    A single node cannot form a k-component because
+    k-connectivity requires at least two nodes.
     """
     G = nx.DiGraph()
-    result = nx.weak_k_components(G)
-    assert result == {}
+    G.add_node(0)
+    return G
 
 
-def test_strong_k_components_empty_graph():
+def build_disconnected_directed_graph():
     """
-    Empty directed graph should return empty dict.
+    Returns two disconnected directed edges: 0->1 and 2->3.
+
+    Neither edge forms a strongly connected component since
+    you cannot return from node 1 to node 0, or 3 to 2.
+    Weakly, each pair forms a separate 1-component.
     """
     G = nx.DiGraph()
-    result = nx.strong_k_components(G)
-    assert result == {}
+    G.add_edges_from([(0, 1), (2, 3)])
+    return G
+
+
+def build_grannis_figure2_graph():
+    """
+    Returns the directed graph from Grannis (2009) Figure 2.
+
+    7 nodes, 11 directed arcs. Used to validate weak
+    k-connectivity against Table 1(a) known values.
+
+    From Table 1(a):
+    - Nodes 1,2,3,4,5,6 are weakly 2-connected
+    - Node 7 has weak connectivity of only 1
+
+    Reference:
+    Grannis, R. (2009). Paths and Semipaths.
+    Sociological Methodology, 39, 117-150. Figure 2, p.122.
+    https://www.jstor.org/stable/40376146
+    """
+    G = nx.DiGraph()
+    G.add_edges_from([
+        (1, 2), (2, 3), (3, 1),
+        (3, 4), (4, 1),
+        (1, 5), (3, 5),
+        (1, 6), (3, 6),
+        (2, 4),
+        (7, 1),
+    ])
+    return G
+
+
+# ============================================================
+# TESTS: WEAK K-COMPONENTS
+# ============================================================
+
+
+def test_weak_k_components_simple_cycle():
+    """
+    A 4-node directed cycle is 2-connected when direction
+    is ignored because two independent semipaths connect
+    any pair of nodes.
+    """
+    G = build_simple_directed_cycle()
+    result = weak_k_components(G)
+    expected = {1: [{0, 1, 2, 3}], 2: [{0, 1, 2, 3}]}
+    assert result == expected
 
 
 def test_weak_k_components_single_node():
     """
-    Single isolated node has no connectivity.
-    Should return empty dict or k=0 entry.
+    A single isolated node cannot form any k-component.
+    NetworkX requires at least 2 nodes for k=1.
     """
-    G = nx.DiGraph()
-    G.add_node(0)
-    result = nx.weak_k_components(G)
-    # Single node cannot form a k-component
-    # with k >= 1 (needs at least 2 nodes)
-    for k, components in result.items():
-        for comp in components:
-            assert len(comp) > 1, "Single node should not form a k-component"
-
-
-def test_strong_k_components_single_node():
-    """
-    Single isolated node — same as weak version.
-    """
-    G = nx.DiGraph()
-    G.add_node(0)
-    result = nx.strong_k_components(G)
-    for k, components in result.items():
-        for comp in components:
-            assert len(comp) > 1
-
-
-def test_weak_k_components_no_edges():
-    """
-    Directed graph with nodes but no edges.
-    Cannot form any k-components with k >= 1.
-    """
-    G = nx.DiGraph()
-    G.add_nodes_from([0, 1, 2, 3, 4])
-    result = nx.weak_k_components(G)
+    G = build_single_node_graph()
+    result = weak_k_components(G)
     assert result == {}
 
 
-# ============================================================
-# SECTION 4: WEAK vs STRONG DIFFERENCE TESTS
-# ============================================================
-
-
-def test_weak_finds_more_components_than_strong():
+def test_weak_k_components_disconnected():
     """
-    CORE TEST — This is the fundamental difference
-    between weak and strong k-components.
-
-    Weak ignores direction → finds more connectivity
-    Strong respects direction → stricter requirement
-
-    Therefore: weak components >= strong components
-    in terms of what gets grouped together.
+    Two disconnected directed edges form two separate
+    weak 1-components — one per connected pair.
     """
-    G = directed_two_components()
-    weak_result = nx.weak_k_components(G)
-    strong_result = nx.strong_k_components(G)
-
-    # Count total components at each level
-    weak_total = sum(len(v) for v in weak_result.values())
-    strong_total = sum(len(v) for v in strong_result.values())
-
-    # Weak should find at least as many components
-    # as strong (or more, since it's less strict)
-    assert weak_total >= strong_total
+    G = build_disconnected_directed_graph()
+    result = weak_k_components(G)
+    expected = {1: [{0, 1}, {2, 3}]}
+    assert result == expected
 
 
-def test_symmetric_directed_graph_weak_equals_strong():
+def test_weak_k_components_empty_graph():
     """
-    When all edges are bidirectional (symmetric),
-    weak and strong k-components should be identical
-    because direction doesn't matter.
-    """
-    G = strongly_connected_directed_graph()
-    weak_result = nx.weak_k_components(G)
-    strong_result = nx.strong_k_components(G)
-
-    # For fully symmetric graph, results should match
-    assert weak_result == strong_result
-
-
-def test_one_way_edge_breaks_strong_not_weak():
-    """
-    A one-way edge between two groups:
-    - Weak: ignores direction, sees it as connected
-    - Strong: respects direction, sees it as one-way
-
-    Graph: Group A ←→ Group A (bidirectional internally)
-           Group B ←→ Group B (bidirectional internally)
-           Group A → Group B (ONE WAY bridge)
-
-    Weak sees A and B as connected.
-    Strong sees A → B but NOT B → A.
+    An empty directed graph with no nodes or edges
+    returns an empty dictionary — nothing to compute.
     """
     G = nx.DiGraph()
-    # Group A — fully connected internally
-    G.add_edges_from([(0, 1), (1, 0), (1, 2), (2, 1), (0, 2), (2, 0)])
-    # Group B — fully connected internally
-    G.add_edges_from([(3, 4), (4, 3), (4, 5), (5, 4), (3, 5), (5, 3)])
-    # One-way bridge A → B only
-    G.add_edge(2, 3)
-
-    weak_result = nx.weak_k_components(G)
-    strong_result = nx.strong_k_components(G)
-
-    # Weak connectivity ignores the direction of bridge
-    # Strong connectivity must respect it
-    # So strong should NOT merge A and B into same component
-    if 1 in strong_result:
-        strong_nodes = [node for comp in strong_result[1] for node in comp]
-        # Nodes from A and B should NOT be
-        # in same strong component
-        for comp in strong_result.get(1, []):
-            has_a = any(n in {0, 1, 2} for n in comp)
-            has_b = any(n in {3, 4, 5} for n in comp)
-            assert not (has_a and has_b), (
-                "Strong components should not merge one-way connected groups"
-            )
+    result = weak_k_components(G)
+    assert result == {}
 
 
-# ============================================================
-# SECTION 5: KNOWN GRAPH TESTS
-# ============================================================
-
-
-def test_directed_complete_graph_high_connectivity():
+def test_weak_k_components_rejects_undirected():
     """
-    Complete directed graph K4 (all edges both directions).
-    Should have very high k-connectivity since every
-    node connects to every other node in both directions.
+    weak_k_components is designed only for directed graphs.
+    For undirected graphs, use nx.k_components instead.
     """
-    G = directed_complete_graph()
-    result = nx.weak_k_components(G)
-
-    # All nodes should be in highest connectivity component
-    all_nodes = set(G.nodes())
-    found_all_nodes = False
-    for k, components in result.items():
-        for comp in components:
-            if all_nodes.issubset(comp):
-                found_all_nodes = True
-    assert found_all_nodes, (
-        "All nodes should appear in some k-component for complete directed graph"
-    )
+    G = nx.petersen_graph()
+    with pytest.raises(nx.NetworkXNotImplemented):
+        weak_k_components(G)
 
 
-def test_directed_cycle_connectivity():
+def test_weak_k_components_complete_graph():
     """
-    Directed cycle: 0→1→2→3→0
-    This is 1-connected (weakly) since removing
-    any node breaks the cycle.
+    A complete directed graph K4 is 3-connected because
+    you need to remove 3 nodes to disconnect any pair.
+    All 4 nodes appear at k=1, k=2, and k=3.
     """
-    G = nx.DiGraph()
-    G.add_edges_from([(0, 1), (1, 2), (2, 3), (3, 0)])
-    result = nx.weak_k_components(G)
+    G = build_directed_complete_graph()
+    result = weak_k_components(G)
+    expected = {
+        1: [{0, 1, 2, 3}],
+        2: [{0, 1, 2, 3}],
+        3: [{0, 1, 2, 3}],
+    }
+    assert result == expected
 
-    # Should have a 1-component containing all nodes
-    assert 1 in result
-    all_nodes = set(G.nodes())
-    assert any(all_nodes.issubset(comp) for comp in result[1])
 
-
-def test_strong_k_components_directed_cycle():
+def test_weak_k_components_grannis_figure2():
     """
-    Directed cycle is strongly connected —
-    every node can reach every other node.
-    Should appear as a strong k-component.
+    Validates against Grannis (2009) Table 1(a).
+
+    Nodes 1-6 are weakly 2-connected to each other.
+    Node 7 connects into the graph via one arc only,
+    making it weakly 1-connected but not 2-connected.
+
+    Reference: Grannis (2009), Table 1(a), p.123.
     """
-    G = nx.DiGraph()
-    G.add_edges_from([(0, 1), (1, 2), (2, 3), (3, 0)])
-    result = nx.strong_k_components(G)
+    G = build_grannis_figure2_graph()
+    result = weak_k_components(G)
 
     assert 1 in result
-    all_nodes = set(G.nodes())
-    assert any(all_nodes.issubset(comp) for comp in result[1])
+    assert {1, 2, 3, 4, 5, 6, 7} in result[1]
+
+    assert 2 in result
+    assert {1, 2, 3, 4, 5, 6} in result[2]
+
+    for comp in result.get(2, []):
+        assert 7 not in comp
 
 
 # ============================================================
-# SECTION 6: CONSISTENCY TESTS
+# TESTS: STRONG K-COMPONENTS
 # ============================================================
 
 
-def test_weak_k_components_nodes_subset_of_graph():
+def test_strong_k_components_simple_cycle():
     """
-    All nodes in k-components must be actual
-    nodes that exist in the graph.
-    No phantom nodes should appear.
+    A directed cycle is only 1-connected under strong rules.
+    Removing any single node breaks the directional loop —
+    no return path exists. It cannot be 2-connected.
     """
-    G = strongly_connected_directed_graph()
-    result = nx.weak_k_components(G)
-    graph_nodes = set(G.nodes())
-
-    for k, components in result.items():
-        for comp in components:
-            assert comp.issubset(graph_nodes), (
-                f"Component contains nodes not in graph: {comp - graph_nodes}"
-            )
+    G = build_simple_directed_cycle()
+    result = strong_k_components(G)
+    expected = {1: [{0, 1, 2, 3}]}
+    assert result == expected
 
 
-def test_strong_k_components_nodes_subset_of_graph():
+def test_strong_k_components_with_bridge():
     """
-    Same node validity check for strong k-components.
+    A one-way bridge between two cycles creates two separate
+    strong 1-components. Strong connectivity cannot cross
+    a one-directional bridge because no return path exists.
     """
-    G = strongly_connected_directed_graph()
-    result = nx.strong_k_components(G)
-    graph_nodes = set(G.nodes())
+    G = build_directed_two_components_with_bridge()
+    result = strong_k_components(G)
 
-    for k, components in result.items():
-        for comp in components:
-            assert comp.issubset(graph_nodes)
+    assert list(result.keys()) == [1]
+    assert len(result[1]) == 2
+    assert {0, 1, 2} in result[1]
+    assert {3, 4, 5} in result[1]
 
 
-def test_weak_k_components_keys_are_positive():
+def test_strong_k_components_complete_graph():
     """
-    All connectivity levels k must be positive integers.
-    k=0 means no connectivity — not a valid component.
+    A complete directed K4 graph has bidirectional edges
+    between all pairs. It is 3-connected because three
+    independent directed paths exist between every pair.
     """
-    G = strongly_connected_directed_graph()
-    result = nx.weak_k_components(G)
+    G = build_directed_complete_graph()
+    result = strong_k_components(G)
+    expected = {
+        1: [{0, 1, 2, 3}],
+        2: [{0, 1, 2, 3}],
+        3: [{0, 1, 2, 3}],
+    }
+    assert result == expected
 
-    for k in result:
-        assert k >= 1, f"Found invalid connectivity level k={k}"
 
-
-def test_weak_k_components_connectivity_check():
+def test_strong_k_components_empty_graph():
     """
-    Full connectivity verification for weak k-components.
-    Uses helper function to verify each component
-    has at least k node-independent paths.
+    An empty directed graph returns an empty dictionary.
+    No strongly connected components exist with 2+ nodes.
     """
-    G = strongly_connected_directed_graph()
-    result = nx.weak_k_components(G)
-    _check_weak_connectivity(G, result)
+    G = nx.DiGraph()
+    result = strong_k_components(G)
+    assert result == {}
 
 
-def test_strong_k_components_connectivity_check():
+def test_strong_k_components_rejects_undirected():
     """
-    Full connectivity verification for strong k-components.
+    strong_k_components is designed only for directed graphs.
+    Passing an undirected graph raises NetworkXNotImplemented.
     """
-    G = strongly_connected_directed_graph()
-    result = nx.strong_k_components(G)
-    _check_strong_connectivity(G, result)
+    G = nx.petersen_graph()
+    with pytest.raises(nx.NetworkXNotImplemented):
+        strong_k_components(G)
 
 
-# ============================================================
-# SECTION 7: RANDOM GRAPH TESTS
-# ============================================================
-
-
-@pytest.mark.parametrize("seed", [42, 123, 456])
-def test_weak_k_components_random_directed(seed):
+def test_strong_k_components_disconnected():
     """
-    Test weak_k_components on random directed graphs
-    with different random seeds for robustness.
+    Two disconnected one-way edges form no strongly connected
+    components. Nodes 0,1 and 2,3 cannot return to their
+    source, so strong connectivity is zero for all pairs.
     """
-    G = nx.gnp_random_graph(10, 0.4, directed=True, seed=seed)
-    result = nx.weak_k_components(G)
-    _check_weak_connectivity(G, result)
+    G = build_disconnected_directed_graph()
+    result = strong_k_components(G)
+    assert result == {}
 
 
-@pytest.mark.parametrize("seed", [42, 123, 456])
-def test_strong_k_components_random_directed(seed):
-    """
-    Test strong_k_components on random directed graphs.
-    """
-    G = nx.gnp_random_graph(10, 0.4, directed=True, seed=seed)
-    result = nx.strong_k_components(G)
-    _check_strong_connectivity(G, result)
+if __name__ == "__main__":
+    pytest.main(["-v", __file__])
