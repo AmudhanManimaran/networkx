@@ -11,6 +11,7 @@ import networkx as nx
 # Define the default maximum flow function.
 from networkx.algorithms.flow import edmonds_karp
 from networkx.utils import not_implemented_for
+from networkx.algorithms.connectivity import local_node_connectivity
 
 default_flow_func = edmonds_karp
 
@@ -220,6 +221,47 @@ def build_k_number_dict(kcomps):
     }
 
 
+def _build_k_candidates(subgraph, k, flow_func):
+    """
+    Extracts candidate k-components using pairwise local node connectivity.
+    Builds a candidate graph where edges indicate >= k paths exist.
+    """
+    candidate_graph = nx.DiGraph()
+    candidate_graph.add_nodes_from(subgraph.nodes())
+    
+    for u in subgraph:
+        for v in subgraph:
+            if u == v:
+                continue
+            
+            if local_node_connectivity(subgraph, u, v, flow_func=flow_func) >= k:
+                candidate_graph.add_edge(u, v)
+                    
+    return [
+        comp for comp in nx.strongly_connected_components(candidate_graph) 
+        if len(comp) > k
+    ]
+
+
+def _recursive_extraction(G, subset, k, k_comps, flow_func):
+    """
+    Recursively verifies candidates and extracts higher-order k-components
+    as defined by Grannis (2009) Section 3.1.
+    """
+    if len(subset) <= k:
+        return
+        
+    subgraph = G.subgraph(subset)
+    current_connectivity = nx.node_connectivity(subgraph, flow_func=flow_func)
+    
+    if current_connectivity >= k:
+        k_comps[k].append(set(subset))
+        _recursive_extraction(G, subset, k + 1, k_comps, flow_func)
+        return
+
+    candidates = _build_k_candidates(subgraph, k, flow_func)
+    for candidate in candidates:
+        _recursive_extraction(G, candidate, k, k_comps, flow_func)
 
 
 @not_implemented_for("undirected")
@@ -266,6 +308,7 @@ def weak_k_components(G, flow_func=None):
     """
     if flow_func is None:
         flow_func = default_flow_func
+        
     return k_components(G.to_undirected(), flow_func=flow_func)
 
 
@@ -317,17 +360,12 @@ def strong_k_components(G, flow_func=None):
 
     k_comps = defaultdict(list)
 
-    strongly_connected = [
-        set(scc)
-        for scc in nx.strongly_connected_components(G)
-        if len(scc) > 1
-    ]
+    base_components = (
+        set(scc) for scc in nx.strongly_connected_components(G) if len(scc) > 1
+    )
 
-    for component in strongly_connected:
+    for component in base_components:
         k_comps[1].append(component)
-        subgraph = G.subgraph(component)
-        max_connectivity = nx.node_connectivity(subgraph, flow_func=flow_func)
-        for k in range(2, max_connectivity + 1):
-            k_comps[k].append(component)
+        _recursive_extraction(G, component, 2, k_comps, flow_func=flow_func)
 
     return dict(k_comps)
